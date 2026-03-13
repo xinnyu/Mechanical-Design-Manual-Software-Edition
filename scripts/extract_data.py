@@ -134,11 +134,13 @@ def _detect_col_count(cells):
                 )
                 count += 1
 
-        if count < n * 0.2:
+        if count < max(10, n * 0.05):
             continue
         avg_diff = total_diff / count
-        if avg_diff < best_score:
-            best_score = avg_diff
+        # 对大列数加 log 惩罚，防止窄值域表格误选大列数
+        score = avg_diff * math.log(cols + 1)
+        if score < best_score:
+            best_score = score
             best_cols = cols
 
     return best_cols if best_cols > 0 else 0
