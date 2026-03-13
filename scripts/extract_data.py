@@ -260,11 +260,13 @@ def build_output(nodes, roots, content_map):
 
     # 内容按章节目录分组，拆成多个小文件按需加载
     # chapter_key = 路径第一段 (如 NEW01, SEW, 02 等)
+    # 统一为大写以避免 macOS 大小写不敏感文件系统冲突
     chapters = {}
     for did, node in nodes.items():
         ck = make_content_key(node)
         if ck and ck in content_map and not node['children']:
             chapter = ck.split('\\')[0] if '\\' in ck else 'misc'
+            chapter = chapter.upper()
             if chapter not in chapters:
                 chapters[chapter] = {}
             chapters[chapter][ck] = content_map[ck]

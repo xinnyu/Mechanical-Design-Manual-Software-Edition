@@ -32,7 +32,7 @@ async function loadContent(contentId) {
     content.value = ''
     return
   }
-  const chapter = contentId.split('\\')[0] || 'misc'
+  const chapter = (contentId.split('\\')[0] || 'misc').toUpperCase()
 
   if (!chapterCache[chapter]) {
     loading.value = true
