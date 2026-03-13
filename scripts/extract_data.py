@@ -105,7 +105,7 @@ def _detect_col_count(cells):
     """
     n = len(cells)
     if n <= 3:
-        return n
+        return 0
 
     # 解析所有 cell 为数值
     nums = []
@@ -185,11 +185,23 @@ def _find_data_start(cells, cols):
     return 0
 
 
+def _detect_col_count_text(cells):
+    """纯文本表格的列数检测（自相关失败时的备用方案）。
+
+    目前纯文本表格缺乏可靠的列数检测信号，暂时返回 0
+    让这些内容以纯文本形式显示。
+    """
+    return 0
+
+
 def _rebuild_table_rows(cells):
     """将扁平的 cell 列表重建为 \\n 分隔行、\\t 分隔列的文本。"""
     cols = _detect_col_count(cells)
     if cols < 2:
-        # 无法检测列数（纯文本），每个 cell 作为独立段落
+        # 自相关失败，尝试文本模式检测
+        cols = _detect_col_count_text(cells)
+    if cols < 2:
+        # 仍然无法检测列数，每个 cell 作为独立段落
         return '\n'.join(c for c in cells if c.strip())
 
     # 找到数据行起始位置
