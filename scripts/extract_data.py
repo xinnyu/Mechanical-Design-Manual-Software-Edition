@@ -50,8 +50,7 @@ def extract_content():
     cnx_path = os.path.join(DATA_DIR, '新编机械设计手册.cnx')
 
     with open(cnt_path, 'rb') as f:
-        cnt_data = f.read()
-    cnt_text = cnt_data.decode('gbk', errors='replace')
+        cnt_bytes = f.read()
 
     with open(cnx_path, 'rb') as f:
         cnx_text = f.read().decode('gbk', errors='replace')
@@ -68,7 +67,14 @@ def extract_content():
         gallery_key = match.group(1)
 
         start, end = map(int, offset_line.split(','))
-        text = cnt_text[start:end].strip()
+        # 用字节偏移在原始 bytes 上切片，然后再解码
+        chunk = cnt_bytes[start:end]
+        text = chunk.decode('gbk', errors='replace').strip()
+        # 关键：\r\n = 段落/行换行, 单独的 \r = 表格单元格分隔
+        # 先保护 \r\n，把单独的 \r 转为 \t（tab），再恢复 \r\n -> \n
+        text = text.replace('\r\n', '\x00')
+        text = text.replace('\r', '\t')
+        text = text.replace('\x00', '\n')
         content_map[gallery_key] = text
 
     return content_map
