@@ -58,9 +58,8 @@ function escapeHtml(text) {
 
 /**
  * 格式化内容：
- * - 数据中 \t = 原始表格单元格分隔
- * - \n = 段落/大块分隔
- * - 含 tab 的行 → 渲染为 HTML table
+ * - 数据已在 Python 端预处理：\n = 行分隔, \t = 列分隔
+ * - 连续的含 tab 行 → 合并渲染为一个 HTML table
  * - 纯文本行 → 普通段落
  */
 const formattedContent = computed(() => {
@@ -69,73 +68,69 @@ const formattedContent = computed(() => {
 })
 
 function formatText(text) {
-  const paragraphs = text.split('\n')
+  const lines = text.split('\n')
   const result = []
+  let tableRows = []
 
-  for (const para of paragraphs) {
-    const trimmed = para.trim()
-    if (!trimmed) continue
+  function flushTable() {
+    if (tableRows.length === 0) return
+    result.push(renderTable(tableRows))
+    tableRows = []
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      flushTable()
+      continue
+    }
 
     if (trimmed.includes('\t')) {
-      // 含 tab 的行 → 表格数据
-      result.push(renderTabularLine(trimmed))
+      tableRows.push(trimmed.split('\t'))
     } else {
-      // 普通文本
+      flushTable()
       result.push(`<p class="para">${escapeHtml(trimmed)}</p>`)
     }
   }
+  flushTable()
 
   return result.join('')
 }
 
 /**
- * 将 tab 分隔的行渲染为 HTML 表格。
- * 检测表头（第一组 cells）和数据区域，按列数自动分行。
+ * 将多行 tab 分隔数据渲染为 HTML 表格。
+ * 第一行作为表头，其余为数据行。
  */
-function renderTabularLine(line) {
-  const cells = line.split('\t')
+function renderTable(rows) {
+  if (rows.length === 0) return ''
 
-  // 过滤尾部空 cell
-  while (cells.length > 0 && cells[cells.length - 1].trim() === '') {
-    cells.pop()
+  // 找最大列数
+  let maxCols = 0
+  for (const row of rows) {
+    if (row.length > maxCols) maxCols = row.length
   }
 
-  if (cells.length <= 1) {
-    return `<p class="para">${escapeHtml(cells[0] || '')}</p>`
-  }
+  // 判断第一行是否为表头（含非数值内容）
+  const firstRow = rows[0]
+  const isHeaderRow = firstRow.some(c => c.trim() && !/^-?\d*\.?\d+$/.test(c.trim()) && c.trim() !== '-')
 
-  // 检测列数：找第一组连续非空 cells 作为表头来推断
-  // 如果有空字符串 cell，可能是合并单元格的标志
-  const colCount = detectColumnCount(cells)
-
-  if (colCount <= 1 || colCount > 20) {
-    // 无法推断列数，用 pre 展示
-    const text = cells.filter(c => c.trim()).join('  ')
-    return `<pre class="data-block">${escapeHtml(text)}</pre>`
-  }
-
-  // 按列数分行
-  const rows = []
-  for (let i = 0; i < cells.length; i += colCount) {
-    rows.push(cells.slice(i, i + colCount))
-  }
-
-  // 渲染为 table
   let html = '<div class="table-wrap"><table class="data-table">'
 
-  // 第一行作为表头
-  if (rows.length > 0) {
+  let dataStart = 0
+  if (isHeaderRow) {
     html += '<thead><tr>'
-    for (const cell of rows[0]) {
+    for (const cell of firstRow) {
+      const colspan = firstRow.length < maxCols && firstRow.indexOf(cell) === 0
+        ? '' : ''
       html += `<th>${escapeHtml(cell)}</th>`
     }
     html += '</tr></thead>'
+    dataStart = 1
   }
 
-  // 数据行
-  if (rows.length > 1) {
+  if (rows.length > dataStart) {
     html += '<tbody>'
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = dataStart; i < rows.length; i++) {
       html += '<tr>'
       for (const cell of rows[i]) {
         html += `<td>${escapeHtml(cell)}</td>`
@@ -147,57 +142,6 @@ function renderTabularLine(line) {
 
   html += '</table></div>'
   return html
-}
-
-/**
- * 推断列数：从表头区域的非空 cells 模式推断。
- * 策略：找到第一个空字符串的位置作为列数候选，
- * 如果没有空字符串，尝试常见列数。
- */
-function detectColumnCount(cells) {
-  // 方法1：如果前面几个 cells 后出现空 cell，可能标志表头结束
-  // 但空 cell 也可能是合并单元格
-
-  // 方法2：尝试不同列数，找最干净的分割
-  // 评分标准：行尾空 cell 最少的列数
-  const maxCols = Math.min(15, cells.length)
-  let bestCols = 0
-  let bestScore = -1
-
-  for (let cols = 2; cols <= maxCols; cols++) {
-    if (cells.length % cols !== 0) continue
-
-    const numRows = cells.length / cols
-    if (numRows < 2) continue
-
-    // 评分：非空 cell 的比例
-    let nonEmpty = 0
-    for (const cell of cells) {
-      if (cell.trim()) nonEmpty++
-    }
-    const score = nonEmpty / cells.length
-
-    // 偏好较小的列数（更可能是正确的）
-    const adjustedScore = score + (1 / cols) * 0.1
-
-    if (adjustedScore > bestScore) {
-      bestScore = adjustedScore
-      bestCols = cols
-    }
-  }
-
-  // 如果无法整除，找接近整除的列数
-  if (bestCols === 0) {
-    for (let cols = 2; cols <= maxCols; cols++) {
-      const remainder = cells.length % cols
-      if (remainder <= 2) {
-        bestCols = cols
-        break
-      }
-    }
-  }
-
-  return bestCols || 0
 }
 
 watch(

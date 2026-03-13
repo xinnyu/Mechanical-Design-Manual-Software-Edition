@@ -4,6 +4,7 @@
 import csv
 import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -67,17 +68,153 @@ def extract_content():
         gallery_key = match.group(1)
 
         start, end = map(int, offset_line.split(','))
-        # 用字节偏移在原始 bytes 上切片，然后再解码
         chunk = cnt_bytes[start:end]
         text = chunk.decode('gbk', errors='replace').strip()
-        # 关键：\r\n = 段落/行换行, 单独的 \r = 表格单元格分隔
-        # 先保护 \r\n，把单独的 \r 转为 \t（tab），再恢复 \r\n -> \n
+        # \r\n = 段落分隔, 单独 \r = 单元格分隔（行列都用 \r）
+        # 先按 \r\n 分段，每段内按 \r 分单元格，再检测列数重建行
         text = text.replace('\r\n', '\x00')
-        text = text.replace('\r', '\t')
-        text = text.replace('\x00', '\n')
-        content_map[gallery_key] = text
+        sections = text.split('\x00')
+        output_parts = []
+        for section in sections:
+            section = section.strip()
+            if not section:
+                continue
+            cells = section.split('\r')
+            # 去掉尾部空 cell
+            while cells and not cells[-1].strip():
+                cells.pop()
+            if not cells:
+                continue
+            if len(cells) <= 1:
+                # 纯文本段落
+                output_parts.append(cells[0])
+            else:
+                # 多个 cell → 尝试重建表格行
+                formatted = _rebuild_table_rows(cells)
+                output_parts.append(formatted)
+        content_map[gallery_key] = '\n'.join(output_parts)
 
     return content_map
+
+
+def _detect_col_count(cells):
+    """从扁平 cell 列表中推断列数。
+
+    使用数值自相关：正确列数下，相距 cols 的 cell 属于同一列，
+    数值差异最小。对纯文本无数值的 section 返回 0。
+    """
+    n = len(cells)
+    if n <= 3:
+        return n
+
+    # 解析所有 cell 为数值
+    nums = []
+    for c in cells:
+        s = c.strip()
+        if not s or s in ('-', '—'):
+            nums.append(None)
+            continue
+        try:
+            nums.append(float(s))
+        except ValueError:
+            nums.append(None)
+
+    best_cols = 0
+    best_score = float('inf')
+
+    for cols in range(2, min(41, n // 2 + 1)):
+        total_diff = 0.0
+        count = 0
+        for i in range(n - cols):
+            v1 = nums[i]
+            v2 = nums[i + cols]
+            if v1 is not None and v2 is not None and v1 != 0 and v2 != 0:
+                total_diff += abs(
+                    math.log(abs(v1) + 0.001) - math.log(abs(v2) + 0.001)
+                )
+                count += 1
+
+        if count < n * 0.2:
+            continue
+        avg_diff = total_diff / count
+        if avg_diff < best_score:
+            best_score = avg_diff
+            best_cols = cols
+
+    return best_cols if best_cols > 0 else 0
+
+
+def _find_data_start(cells, cols):
+    """找到数据行的起始位置（跳过不对齐的表头）。
+
+    扫描所有可能的起始位置，选择使前两行数值比例最高的位置。
+    """
+    n = len(cells)
+
+    def _is_num(s):
+        s = s.strip()
+        if not s or s in ('-', '—'):
+            return True
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+
+    best_d = 0
+    best_score = -1
+    search_range = min(n - cols * 2, cols * 3)
+    if search_range <= 0:
+        return 0
+
+    for d in range(search_range):
+        if d + cols * 2 > n:
+            break
+        row1 = cells[d:d + cols]
+        row2 = cells[d + cols:d + cols * 2]
+        num1 = sum(1 for c in row1 if _is_num(c))
+        num2 = sum(1 for c in row2 if _is_num(c))
+        score = num1 + num2
+        if score > best_score:
+            best_score = score
+            best_d = d
+
+    # 只有当数值行确实比全部从头开始好时才偏移
+    if best_score >= cols * 1.6:
+        return best_d
+    return 0
+
+
+def _rebuild_table_rows(cells):
+    """将扁平的 cell 列表重建为 \\n 分隔行、\\t 分隔列的文本。"""
+    cols = _detect_col_count(cells)
+    if cols < 2:
+        # 无法检测列数（纯文本），每个 cell 作为独立段落
+        return '\n'.join(c for c in cells if c.strip())
+
+    # 找到数据行起始位置
+    data_start = _find_data_start(cells, cols)
+
+    rows = []
+    # 表头部分：不按 cols 分行，每个 cell 拼成一行
+    if data_start > 0:
+        header_cells = cells[:data_start]
+        # 尝试把表头也按 cols 对齐；如果不能整除，合并为一行
+        if len(header_cells) == cols:
+            rows.append('\t'.join(header_cells))
+        elif len(header_cells) % cols == 0:
+            for i in range(0, len(header_cells), cols):
+                rows.append('\t'.join(header_cells[i:i + cols]))
+        else:
+            # 表头 cell 数与 cols 不匹配，把多余部分合并输出
+            rows.append('\t'.join(header_cells))
+
+    # 数据部分
+    for i in range(data_start, len(cells), cols):
+        row_cells = cells[i:i + cols]
+        rows.append('\t'.join(row_cells))
+
+    return '\n'.join(rows)
 
 
 def build_output(nodes, roots, content_map):
